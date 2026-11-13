@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>정확한 기상청 체감 날씨 예측</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+        body { font-family: 'Inter', sans-serif; background: #eff6ff; }
+        .hide-scroll::-webkit-scrollbar { display: none; }
+    </style>
+</head>
+<body class="text-slate-800 min-h-screen flex flex-col items-center py-10 px-4">
+
+    <div class="w-full max-w-4xl space-y-6">
+        <div class="flex flex-col md:flex-row justify-between items-center bg-white p-6 rounded-2xl shadow-sm">
+            <h1 class="text-2xl font-bold text-blue-600 mb-4 md:mb-0"><i class="fa-solid fa-cloud-sun-rain mr-2"></i>KMA 날씨 예측</h1>
+            <div class="flex space-x-2">
+                <select id="region-select" class="border border-slate-200 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <option value="53,73">제주도 서귀포시 (서귀동)</option>
+                    <option value="60,127">서울특별시 (중구)</option>
+                    <option value="98,76">부산광역시 (해운대구)</option>
+                </select>
+                <button onclick="updateWeather()" class="bg-blue-600 text-white px-5 py-2 rounded-lg hover:bg-blue-700 transition">조회</button>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div class="bg-white p-8 rounded-2xl shadow-sm flex flex-col justify-center items-center text-center">
+                <h2 class="text-slate-500 font-semibold mb-2" id="current-location">서귀포시 서귀동</h2>
+                <div class="bg-blue-100 text-blue-700 text-xs font-bold px-3 py-1.5 rounded-full mb-2 shadow-sm"><i class="fa-solid fa-temperature-half mr-1"></i>현재 체감온도</div>
+                <p class="text-xs text-slate-400 mb-4" id="base-time-info">예측 데이터를 불러오는 중...</p>
+                <i id="current-icon" class="fa-solid fa-cloud-sun text-6xl text-blue-400 mb-4"></i>
+                <div class="text-6xl font-extrabold mb-2 text-slate-800 tracking-tighter"><span id="current-temp">-</span><span class="text-4xl text-slate-400 font-medium">°</span></div>
+                <div class="flex space-x-4 mt-4 text-sm font-semibold text-slate-500 bg-slate-50 px-4 py-2 rounded-lg">
+                    <div><i class="fa-solid fa-temperature-empty text-blue-300 mr-1"></i>기준기온 <span id="actual-temp">-</span>°</div>
+                    <div class="border-l border-slate-200 pl-4"><i class="fa-solid fa-droplet text-blue-300 mr-1"></i>습도 <span id="current-humidity">-</span>%</div>
+                </div>
+            </div>
+
+            <div class="bg-white p-6 rounded-2xl shadow-sm md:col-span-2">
+                <h3 class="text-lg font-bold mb-4">향후 12시간 온도 예측 (단기예보)</h3>
+                <div class="relative h-64 w-full">
+                    <canvas id="forecastChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="bg-white p-6 rounded-2xl shadow-sm">
+            <h3 class="text-lg font-bold mb-4 text-blue-600"><i class="fa-solid fa-shirt mr-2"></i>체감온도 맞춤 라이프스타일 팁</h3>
+            <p id="lifestyle-tip" class="text-slate-600 bg-blue-50 p-4 rounded-xl font-medium">데이터를 불러오는 중입니다...</p>
+            
+            <h3 class="text-lg font-bold mt-8 mb-4">시간별 상세 예측</h3>
+            <div id="hourly-container" class="flex overflow-x-auto space-x-4 pb-4 hide-scroll">
+            </div>
+        </div>
+    </div>
+
+<script>
+    const API_KEY = "dXf841IepHsp%2FOEs2XfuZZzS1G%2FfbzN3WqlBBAhsOskDb9QYA0OUbXKg9yejNQ9Yl6LeIg8G6lEZ0Co%2Fb6pzhg%3D%3D";
+    let chartInstance = null;
+
+    function getNcstBaseTime() {
+        const now = new Date();
+        let y = now.getFullYear(), m = now.getMonth() + 1, d = now.getDate();
+        let h = now.getHours(), min = now.getMinutes();
+        if (min < 40) {
+            h -= 1;
+            if (h < 0) { h = 23; d -= 1; }
+        }
+        return { date: `${y}${String(m).padStart(2,'0')}${String(d).padStart(2,'0')}`, time: `${String(h).padStart(2,'0')}00`, hour: h };
+    }
+
+    function getFcstBaseTime() {
+        const now = new Date();
+        let h = now.getHours();
+        let min = now.getMinutes();
+        let baseTimes = [2, 5, 8, 11, 14, 17, 20, 23];
+        let targetH = -1;
+        for (let i = baseTimes.length - 1; i >= 0; i--) {
+            if (h > baseTimes[i] || (h === baseTimes[i] && min >= 10)) { targetH = baseTimes[i]; break; }
+        }
+        let targetDate = new Date(now);
+        if (targetH === -1) { targetH = 23; targetDate.setDate(targetDate.getDate() - 1); }
+        let y = targetDate.getFullYear(), m = targetDate.getMonth() + 1, d = targetDate.getDate();
+        return { date: `${y}${String(m).padStart(2,'0')}${String(d).padStart(2,'0')}`, time: `${String(targetH).padStart(2,'0')}00` };
+    }
+
+    async function updateWeather() {
+        const coords = document.getElementById('region-select').value.split(',');
+        const nx = coords[0], ny = coords[1];
+        document.getElementById('current-location').innerText = document.getElementById('region-select').options[document.getElementById('region-select').selectedIndex].text;
+        
+        const ncstTime = getNcstBaseTime();
+        const fcstTime = getFcstBaseTime();
+
+        const urlNcst = `https://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getUltraSrtNcst?serviceKey=${API_KEY}&pageNo=1&numOfRows=10&dataType=JSON&base_date=${ncstTime.date}&base_time=${ncstTime.time}&nx=${nx}&ny=${ny}`;
+        const urlFcst = `https://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getVilageFcst?serviceKey=${API_KEY}&pageNo=1&numOfRows=150&dataType=JSON&base_date=${fcstTime.date}&base_time=${fcstTime.time}&nx=${nx}&ny=${ny}`;
+
+        try {
+            const [resNcst, resFcst] = await Promise.all([fetch(urlNcst), fetch(urlFcst)]);
+            const dataNcst = await resNcst.json();
+            const dataFcst = await resFcst.json();
+
+            const itemsNcst = dataNcst.response.body.items.item;
+            let wsd = 0, reh = 50;
+            itemsNcst.forEach(it => {
+                if (it.category === 'WSD') wsd = parseFloat(it.obsrValue);
+                if (it.category === 'REH') reh = parseFloat(it.obsrValue);
+            });
+
+            const itemsFcst = dataFcst.response.body.items.item;
+            let forecasts = itemsFcst.filter(it => it.category === 'TMP').map(it => ({
+                date: it.fcstDate,
+                time: it.fcstTime,
+                temp: parseFloat(it.fcstValue)
+            })).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+
+            const currentHourStr = String(new Date().getHours()).padStart(2, '0') + '00';
+            let currentFcst = forecasts.find(f => f.time === currentHourStr) || forecasts[0];
+            let realisticTemp = currentFcst.temp; 
+
+            let feelsLike = realisticTemp;
+            const windKmh = wsd * 3.6;
+            if (realisticTemp <= 10 && windKmh >= 4.8) {
+                feelsLike = 13.12 + 0.6215*realisticTemp - 11.37*Math.pow(windKmh, 0.16) + 0.3965*realisticTemp*Math.pow(windKmh, 0.16);
+            } else if (realisticTemp > 10) {
+                feelsLike = realisticTemp + (reh - 50) * 0.03; 
+            }
+            feelsLike = Math.round(feelsLike * 10) / 10; 
+
+            document.getElementById('current-temp').innerText = feelsLike;
+            document.getElementById('actual-temp').innerText = realisticTemp;
+            document.getElementById('current-humidity').innerText = reh;
+            document.getElementById('base-time-info').innerText = `현재 시간(${new Date().getHours()}시) 풍속/습도 반영`;
+
+            const next12Hours = forecasts.slice(0, 12);
+            const labels = next12Hours.map(it => `${parseInt(it.time.substring(0,2))}시`);
+            const temps = next12Hours.map(it => it.temp);
+            renderChart(labels, temps);
+
+            const hourlyContainer = document.getElementById('hourly-container');
+            hourlyContainer.innerHTML = '';
+            next12Hours.forEach(it => {
+                const box = document.createElement('div');
+                box.className = "flex flex-col items-center justify-center bg-blue-50 min-w-[80px] py-4 rounded-xl";
+                box.innerHTML = `<span class="text-sm font-semibold text-slate-500 mb-2">${parseInt(it.time.substring(0,2))}시</span>
+                                 <span class="text-lg font-bold text-slate-800">${it.temp}°</span>`;
+                hourlyContainer.appendChild(box);
+            });
+
+            updateLifestyleTip(feelsLike);
+
+        } catch (error) {
+            console.error(error);
+            document.getElementById('base-time-info').innerText = "데이터 로딩 실패";
+        }
+    }
+
+    function renderChart(labels, data) {
+        const ctx = document.getElementById('forecastChart').getContext('2d');
+        if (chartInstance) chartInstance.destroy();
+        chartInstance = new Chart(ctx, {
+            type: 'line',
+            data: { labels: labels, datasets: [{ label: '예측 온도 (℃)', data: data, borderColor: '#3b82f6', backgroundColor: 'rgba(59, 130, 246, 0.1)', borderWidth: 3, fill: true, tension: 0.4 }] },
+            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { display: true }, x: { grid: { display: false } } } }
+        });
+    }
+
+    function updateLifestyleTip(temp) {
+        let tip = "";
+        if (temp >= 23) tip = "다소 덥습니다. 얇은 셔츠나 반팔이 좋습니다.";
+        else if (temp >= 20) tip = "선선합니다. 얇은 가디건이나 긴팔 티셔츠를 추천합니다.";
+        else if (temp >= 17) tip = "조금 쌀쌀할 수 있습니다. 얇은 니트, 맨투맨을 챙기세요.";
+        else if (temp >= 12) tip = "제법 쌀쌀합니다. 자켓, 가디건을 겹쳐 입으세요.";
+        else if (temp >= 9) tip = "춥습니다. 트렌치코트나 두꺼운 니트가 필요합니다.";
+        else if (temp >= 5) tip = "많이 춥습니다. 코트나 히트텍을 착용하세요.";
+        else tip = "매우 춥습니다. 패딩과 목도리로 방한에 신경 쓰세요.";
+        document.getElementById('lifestyle-tip').innerText = tip;
+    }
+
+    updateWeather();
+</script>
+</body>
+</html>
